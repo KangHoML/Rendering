@@ -211,3 +211,31 @@ ADD_SUBDIRECTORY(src)
 if (WIN32)
 ADD_SUBDIRECTORY(docs)
 endif()
+
+## OPENGL
+# OpenGL setting
+find_package(OpenGL REQUIRED)
+include_directories(${OPENGL_INCLUDE_DIRS})
+
+# GLFW setting
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GLFW REQUIRED glfw3)
+include_directories(${GLFW_INCLUDE_DIRS})
+
+# GLAD setting
+option(USE_GLAD "Use GLAD" ON)
+if(USE_GLAD)
+    add_definitions(-DUSE_GLAD)
+endif()
+
+# OpenGL setting
+set(OpenGL_GL_PREFERENCE GLVND)
+
+# OpenGL linking
+link_libraries(${OPENGL_LIBRARIES} ${GLFW_LIBRARIES})
+
+## OpenCV
+find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui ximgproc optflow)
+include_directories(${OpenCV_INCLUDE_DIRS})
+link_directories(${OpenCV_LIBRARY_DIRS})
+add_definitions(${OpenCV_DEFINITIONS})

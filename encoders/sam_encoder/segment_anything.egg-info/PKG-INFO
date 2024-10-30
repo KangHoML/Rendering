@@ -1,5 +1,5 @@
 Metadata-Version: 2.1
-Name: segment_anything
+Name: segment-anything
 Version: 1.0
 Provides-Extra: all
 Requires-Dist: matplotlib; extra == "all"

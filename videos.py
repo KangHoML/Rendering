@@ -45,9 +45,8 @@ def create_video_from_images(image_folder, output_video_file, fps):
     for image in images:
         video.write(cv2.imread(os.path.join(image_folder, image)))
 
-    cv2.destroyAllWindows()
+    # cv2.destroyAllWindows()
     video.release()
-
 
 
 def main(args: argparse.Namespace) -> None:
