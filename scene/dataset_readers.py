@@ -146,6 +146,7 @@ def storePly(path, xyz, rgb):
     ply_data.write(path)
 
 def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8):
+    # COLMAP의 카메라 정보(내, 외부) 로드
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -159,10 +160,13 @@ def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8):
     
     reading_dir = "images" if images == None else images
 
+    # Foundation 모델에 따른 경로 설정
     if foundation_model =='sam':
         semantic_feature_dir = "sam_embeddings" 
     elif foundation_model =='lseg':
         semantic_feature_dir = "rgb_feature_langseg" 
+    
+    # 카메라 정보 읽기 및 정렬
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, 
                                            images_folder=os.path.join(path, reading_dir), semantic_feature_folder=os.path.join(path, semantic_feature_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
@@ -171,6 +175,7 @@ def readColmapSceneInfo(path, foundation_model, images, eval, llffhold=8):
     # print(cam_infos)
     semantic_feature_dim = cam_infos[0].semantic_feature.shape[0]
 
+    # train / test 분할 (8장마다 하나의 view를 테스트 세트로 사용)
     if eval:
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 2] # avoid 1st to be test view
         test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 2] 

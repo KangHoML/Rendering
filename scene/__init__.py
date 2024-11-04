@@ -40,9 +40,12 @@ class Scene:
         self.train_cameras = {}
         self.test_cameras = {}
 
+        
         if os.path.exists(os.path.join(args.source_path, "sparse")):
+            # COLMAP에 의한 데이터셋
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.foundation_model, args.images, args.eval) 
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
+            # Blender에 의한 데이터셋 (NeRF 합성 데이터)
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path,  args.foundation_model, args.white_background, args.eval) 
         else:
@@ -68,12 +71,14 @@ class Scene:
 
         self.cameras_extent = scene_info.nerf_normalization["radius"]
 
+        # 여러 해상도 지원
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
 
+        # GaussianModel로부터 가우시안 정보 가져오기
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path,
                                                            "point_cloud",

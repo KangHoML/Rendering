@@ -42,22 +42,29 @@ class GaussianModel:
 
 
     def __init__(self, sh_degree : int):
-        self.active_sh_degree = 0
-        self.max_sh_degree = sh_degree  
+        # 중심 위치, scaling, rotation, 불투명도, feature
         self._xyz = torch.empty(0)
-        self._features_dc = torch.empty(0)
-        self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
+        self._semantic_feature = torch.empty(0) 
+
+        # SH 관련 변수
+        self.active_sh_degree = 0
+        self.max_sh_degree = sh_degree  
+        self._features_dc = torch.empty(0)
+        self._features_rest = torch.empty(0)
+        
+        # adaptive density contorl 관련 변수
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
+        
+        # covariance matrix 관련 설정
         self.setup_functions()
-        self._semantic_feature = torch.empty(0) 
 
     def capture(self):
         return (
@@ -132,22 +139,31 @@ class GaussianModel:
 
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, semantic_feature_size : int, speedup: bool):
         self.spatial_lr_scale = spatial_lr_scale
+
+        # point cloud의 위치, 색상 정보
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+
+        # feature 초기화
         features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
-        features[:, :3, 0 ] = fused_color
-        features[:, 3:, 1:] = 0.0
+        features[:, :3, 0 ] = fused_color   # DC 성분
+        features[:, 3:, 1:] = 0.0           # 고차 성분
         
-        if speedup: # speed up for Segmentation
+        # speedup module 여부에 따른 차원 결정
+        if speedup:
             semantic_feature_size = int(semantic_feature_size/4)
         self._semantic_feature = torch.zeros(fused_point_cloud.shape[0], semantic_feature_size, 1).float().cuda() 
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
 
+        # scaling 초기화
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+
+        # rotation 초기화
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
 
+        # 불투명도 초기화 (sigmoid 역함수 사용)
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
@@ -378,13 +394,15 @@ class GaussianModel:
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
-        # Extract points that satisfy the gradient condition
+        
+        # gradient 조건을 만족하는 가우시안 찾기
         padded_grad = torch.zeros((n_init_points), device="cuda")
         padded_grad[:grads.shape[0]] = grads.squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
 
+        # 새로운 가우시안 정보 (두 개의 가우시안으로 나누기)
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means =torch.zeros((stds.size(0), 3),device="cuda")
         samples = torch.normal(mean=means, std=stds)
@@ -397,16 +415,18 @@ class GaussianModel:
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_semantic_feature = self._semantic_feature[selected_pts_mask].repeat(N,1,1) 
 
+        # 적용
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_semantic_feature) 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
-        # Extract points that satisfy the gradient condition
+        # gradient 조건을 만족하는 가우시안 찾기
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
         
+        # 새로운 가우시안 정보 (복사할 가우시안 정보)
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -415,6 +435,7 @@ class GaussianModel:
         new_rotation = self._rotation[selected_pts_mask]
         new_semantic_feature = self._semantic_feature[selected_pts_mask] 
 
+        # 복사
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_semantic_feature) 
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
