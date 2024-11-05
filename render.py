@@ -83,7 +83,7 @@ def parse_edit_config_and_text_encoding(edit_config):
 
         idx = edit_dict["positive_ids"][0]
 
-    return edit_dict, text_feature, targets[idx]
+    return edit_dict, text_feature, objects[idx]
         
 
 

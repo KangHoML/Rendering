@@ -223,24 +223,41 @@ class GaussianModel:
             l.append('semantic_{}'.format(i))
         return l
 
-    def save_ply(self, path):
+    # chunk 단위로 저장할 수 있도록 변환
+    def save_ply(self, path, chunk_size=100000):
         mkdir_p(os.path.dirname(path))
 
-        xyz = self._xyz.detach().cpu().numpy()
-        normals = np.zeros_like(xyz)
-        f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        opacities = self._opacity.detach().cpu().numpy()
-        scale = self._scaling.detach().cpu().numpy()
-        rotation = self._rotation.detach().cpu().numpy()
+        # 전체 point & chunk 수
+        total_points = self._xyz.shape[0]
+        num_chunks = (total_points + chunk_size - 1) // chunk_size
 
-        semantic_feature = self._semantic_feature.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy() 
-
+        # dtype 정의
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+        elements = np.empty(total_points, dtype=dtype_full)
 
-        elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, semantic_feature), axis=1) 
-        elements[:] = list(map(tuple, attributes))
+        # chunk 단위로 처리
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min((chunk_idx + 1) * chunk_size, total_points)
+
+            # 현재 chunk의 데이터를 cpu로 이동
+            xyz = self._xyz[start_idx:end_idx].detach().cpu().numpy()
+            normals = np.zeros_like(xyz)
+            f_dc = self._features_dc[start_idx:end_idx].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            f_rest = self._features_rest[start_idx:end_idx].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            opacities = self._opacity[start_idx:end_idx].detach().cpu().numpy()
+            scale = self._scaling[start_idx:end_idx].detach().cpu().numpy()
+            rotation = self._rotation[start_idx:end_idx].detach().cpu().numpy()
+            semantic_feature = self._semantic_feature[start_idx:end_idx].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+
+            # chunk 데이터 결합
+            attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, semantic_feature), axis=1) 
+            elements[start_idx:end_idx] = list(map(tuple, attributes))
+
+            # 메모리 정리
+            del xyz, normals, f_dc, f_rest, opacities, scale, rotation, semantic_feature
+            torch.cuda.empty_cache()
+        
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
 
@@ -249,54 +266,93 @@ class GaussianModel:
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
-    def load_ply(self, path):
+    # chunk 단위로 저장할 수 있도록 변환
+    def load_ply(self, path, chunk_size=100000):
         plydata = PlyData.read(path)
 
-        xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
-                        np.asarray(plydata.elements[0]["y"]),
-                        np.asarray(plydata.elements[0]["z"])),  axis=1)
-        opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+        # 전체 point & chunk 수
+        total_points = len(plydata.elements[0].data)
+        num_chunks = (total_points + chunk_size - 1) // chunk_size
 
-        features_dc = np.zeros((xyz.shape[0], 3, 1))
-        features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
-        features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
-        features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
+        # 결과를 저장할 리스트
+        xyz_lst = []
+        f_dc_lst = []
+        f_rest_lst = []
+        opacities_lst = []
+        scale_lst = []
+        rot_lst = []
+        semantic_feature_lst = []
 
-        count = sum(1 for name in plydata.elements[0].data.dtype.names if name.startswith("semantic_"))
-        semantic_feature = np.stack([np.asarray(plydata.elements[0][f"semantic_{i}"]) for i in range(count)], axis=1) 
-        semantic_feature = np.expand_dims(semantic_feature, axis=-1) 
-
+        # 전체 반복이 필요한 부분 먼저 구현
         extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
         extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
         assert len(extra_f_names)==3*(self.max_sh_degree + 1) ** 2 - 3
-        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
-        for idx, attr_name in enumerate(extra_f_names):
-            features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
-        # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
-        features_extra = features_extra.reshape((features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1))
 
         scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
         scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
-        scales = np.zeros((xyz.shape[0], len(scale_names)))
-        for idx, attr_name in enumerate(scale_names):
-            scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
         rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
         rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))
-        rots = np.zeros((xyz.shape[0], len(rot_names)))
-        for idx, attr_name in enumerate(rot_names):
-            rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._semantic_feature = nn.Parameter(torch.tensor(semantic_feature, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
+        semantic_count = sum(1 for name in plydata.elements[0].data.dtype.names if name.startswith("semantic_"))
+
+        # chunk 단위로 처리
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min((chunk_idx + 1) * chunk_size, total_points)
+
+            # Gaussian의 중심 좌표
+            xyz = np.stack((np.asarray(plydata.elements[0]["x"][start_idx:end_idx]),
+                            np.asarray(plydata.elements[0]["y"][start_idx:end_idx]),
+                            np.asarray(plydata.elements[0]["z"][start_idx:end_idx])),  axis=1)
+            xyz_lst.append(torch.tensor(xyz, dtype=torch.float, device="cuda"))
+
+            # SH Coefficient의 DC feature
+            features_dc = np.zeros((end_idx - start_idx, 3, 1))
+            features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"][start_idx:end_idx])
+            features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"][start_idx:end_idx])
+            features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"][start_idx:end_idx])
+            f_dc_lst.append(torch.tensor(features_dc, dtype=torch.float, device="cuda"))
+
+            # SH Coefficient의 rest feature
+            features_extra = np.zeros((end_idx - start_idx, len(extra_f_names)))
+            for idx, attr_name in enumerate(extra_f_names):
+                features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name][start_idx:end_idx])
+            features_extra = features_extra.reshape((end_idx - start_idx, 3, (self.max_sh_degree + 1) ** 2 - 1))
+            f_rest_lst.append(torch.tensor(features_extra, dtype=torch.float, device="cuda"))
+
+            # 불투명도
+            opacities = np.asarray(plydata.elements[0]["opacity"][start_idx:end_idx])[..., np.newaxis]
+            opacities_lst.append(torch.tensor(opacities, dtype=torch.float, device="cuda"))
+
+            # scaling
+            scales = np.zeros((end_idx - start_idx, len(scale_names)))
+            for idx, attr_name in enumerate(scale_names):
+                scales[:, idx] = np.asarray(plydata.elements[0][attr_name][start_idx:end_idx])
+            scale_lst.append(torch.tensor(scales, dtype=torch.float, device="cuda"))
+
+            # rotation
+            rots = np.zeros((end_idx - start_idx, len(rot_names)))
+            for idx, attr_name in enumerate(rot_names):
+                rots[:, idx] = np.asarray(plydata.elements[0][attr_name][start_idx:end_idx])
+            rot_lst.append(torch.tensor(rots, dtype=torch.float, device="cuda"))
+
+            # semantic feature
+            semantic_feature = np.stack([np.asarray(plydata.elements[0][f"semantic_{i}"][start_idx:end_idx]) for i in range(semantic_count)], axis=1) 
+            semantic_feature = np.expand_dims(semantic_feature, axis=-1)
+            semantic_feature_lst.append(torch.tensor(semantic_feature, dtype=torch.float, device="cuda"))
+
+            # 메모리 정리
+            torch.cuda.empty_cache()
+
+        self._xyz = nn.Parameter(torch.cat(xyz_lst, dim=0).requires_grad_(True))
+        self._features_dc = nn.Parameter(torch.cat(f_dc_lst, dim=0).transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(torch.cat(f_rest_lst, dim=0).transpose(1, 2).contiguous().requires_grad_(True))
+        self._opacity = nn.Parameter(torch.cat(opacities_lst, dim=0).requires_grad_(True))
+        self._scaling = nn.Parameter(torch.cat(scale_lst, dim=0).requires_grad_(True))
+        self._rotation = nn.Parameter(torch.cat(rot_lst, dim=0).requires_grad_(True))
+        self._semantic_feature = nn.Parameter(torch.cat(semantic_feature_lst, dim=0).transpose(1, 2).contiguous().requires_grad_(True))
         self.active_sh_degree = self.max_sh_degree
-
-
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}

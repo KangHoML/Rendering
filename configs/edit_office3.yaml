@@ -1,0 +1,6 @@
+edit:
+  objects: ["ceiling", "sofa", "wall", "floor"]
+  operations: "color_func" 
+  colorFunc: "lambda color: torch.tensor([1.0, 0.0, 0.0]).cuda()"  # red
+  targets: "sofa" # sofa
+  threshold: 0.28 # leave it empty if using argmax
