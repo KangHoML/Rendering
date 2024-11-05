@@ -88,6 +88,16 @@ def parse_edit_config_and_text_encoding(edit_config):
 
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, edit_config, speedup):
+    # decoder 초기화
+    cnn_decoder = None
+    if speedup and len(views) > 0:
+        decoder_ckpt_path = os.path.join(model_path, "decoder_chkpnt{}.pth".format(iteration))
+        gt_feature_map = views[0].semantic_feature.cuda()
+        feature_out_dim = gt_feature_map.shape[0]
+        feature_in_dim = int(feature_out_dim/4)
+        cnn_decoder = CNN_decoder(feature_in_dim, feature_out_dim)
+        cnn_decoder.load_state_dict(torch.load(decoder_ckpt_path))
+
     if edit_config != "no editing":
         edit_dict, text_feature, target = parse_edit_config_and_text_encoding(edit_config)
 
@@ -108,15 +118,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         gt_feature_map_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt_feature_map")
         saved_feature_path = os.path.join(model_path, name, "ours_{}".format(iteration), "saved_feature")
         #encoder_ckpt_path = os.path.join(model_path, "encoder_chkpnt{}.pth".format(iteration))
-        decoder_ckpt_path = os.path.join(model_path, "decoder_chkpnt{}.pth".format(iteration))
         depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth") ###
-        
-        if speedup:
-            gt_feature_map = views[0].semantic_feature.cuda()
-            feature_out_dim = gt_feature_map.shape[0]
-            feature_in_dim = int(feature_out_dim/4)
-            cnn_decoder = CNN_decoder(feature_in_dim, feature_out_dim)
-            cnn_decoder.load_state_dict(torch.load(decoder_ckpt_path))
         
         makedirs(render_path, exist_ok=True)
         makedirs(gts_path, exist_ok=True)
@@ -127,7 +129,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         if edit_config != "no editing":
-            render_pkg = render_edit(view, gaussians, pipeline, background, text_feature, edit_dict) 
+            render_pkg = render_edit(view, gaussians, pipeline, background, text_feature, edit_dict, decoder=cnn_decoder if speedup else None) 
             gt = view.original_image[0:3, :, :]
             gt_feature_map = view.semantic_feature.cuda() 
             torchvision.utils.save_image(render_pkg["render"], os.path.join(edit_render_path, '{0:05d}'.format(idx) + ".png")) 
@@ -237,6 +239,17 @@ def render_novel_views(model_path, name, iteration, views, gaussians, pipeline, 
                        edit_config, speedup, multi_interpolate, num_views):
     if multi_interpolate:
         name = name + "_multi_interpolate"
+    
+    # decoder 초기화
+    cnn_decoder = None
+    if speedup and len(views) > 0:
+        decoder_ckpt_path = os.path.join(model_path, "decoder_chkpnt{}.pth".format(iteration))
+        gt_feature_map = views[0].semantic_feature.cuda()
+        feature_out_dim = gt_feature_map.shape[0]
+        feature_in_dim = int(feature_out_dim/4)
+        cnn_decoder = CNN_decoder(feature_in_dim, feature_out_dim)
+        cnn_decoder.load_state_dict(torch.load(decoder_ckpt_path))
+    
     # make dirs
     if edit_config != "no editing":
         edit_dict, text_feature, target = parse_edit_config_and_text_encoding(edit_config)
@@ -253,14 +266,6 @@ def render_novel_views(model_path, name, iteration, views, gaussians, pipeline, 
         feature_map_path = os.path.join(model_path, name, "ours_{}".format(iteration), "feature_map")
         saved_feature_path = os.path.join(model_path, name, "ours_{}".format(iteration), "saved_feature")
         #encoder_ckpt_path = os.path.join(model_path, "encoder_chkpnt{}.pth".format(iteration))
-        decoder_ckpt_path = os.path.join(model_path, "decoder_chkpnt{}.pth".format(iteration))
-
-        if speedup:
-            gt_feature_map = views[0].semantic_feature.cuda()
-            feature_out_dim = gt_feature_map.shape[0]
-            feature_in_dim = int(feature_out_dim/4)
-            cnn_decoder = CNN_decoder(feature_in_dim, feature_out_dim)
-            cnn_decoder.load_state_dict(torch.load(decoder_ckpt_path))
         
         makedirs(render_path, exist_ok=True)
         makedirs(feature_map_path, exist_ok=True)
@@ -285,7 +290,7 @@ def render_novel_views(model_path, name, iteration, views, gaussians, pipeline, 
         view.camera_center = view.world_view_transform.inverse()[3, :3]
 
         if edit_config != "no editing":
-            render_pkg = render_edit(view, gaussians, pipeline, background, text_feature, edit_dict)
+            render_pkg = render_edit(view, gaussians, pipeline, background, text_feature, edit_dict, decoder=cnn_decoder if speedup else None)
             gt = view.original_image[0:3, :, :]
             gt_feature_map = view.semantic_feature.cuda()
             torchvision.utils.save_image(render_pkg["render"], os.path.join(edit_render_path, '{0:05d}'.format(idx) + ".png")) 

@@ -56,7 +56,7 @@ def calculate_selection_score_delete(features, query_features, score_threshold=N
 
 
 def render_edit(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, text_feature : torch.Tensor, edit_dict : dict,
-                scaling_modifier = 1.0, override_color = None): 
+                scaling_modifier = 1.0, override_color = None, decoder=None): 
     """
     Render the scene. 
     
@@ -122,9 +122,14 @@ def render_edit(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
     else:
         colors_precomp = override_color
 
-    semantic_feature = pc.get_semantic_feature
+    semantic_feature = pc.get_semantic_feature                          # [N, 1, F/4]
 
-    
+    # speedup이 적용된 경우 semantic 차원을 cnn_decoder로 차원 복원
+    if decoder is not None:
+        semantic_feature = semantic_feature.permute(1, 2, 0)            # [1, F/4, N]
+        semantic_feature = semantic_feature.unsqueeze(-2)               # [1, F/4, 1, N]
+        semantic_feature = decoder(semantic_feature)                    # [1, F, 1, N]
+        semantic_feature = semantic_feature.squeeze(2).permute(2, 0, 1) # [N, 1, F]
 
 
     
