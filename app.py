@@ -32,34 +32,22 @@ def process_video(input, num_frames):
     vidcap.release()
     return f"Extracted {cnt_trg} frames from video"
 
-# 이미지 폴더 처리
-def process_folder(input, num_frames):
+# 이미지 
+def process_image(input):
     dir = "data/custom/input"
-    ext = {'.jpg', '.jpeg', '.png'}
 
-    # 폴더 내 모든 이미지
-    imgs = []
-    for root, _, files in os.walk(input):
-        for file in files:
-            if Path(file).suffix.lower() in ext:
-                imgs.append(os.path.join(root, file))
+    for idx, img_file in enumerate(input):
+        output_path = os.path.join(dir, f"rgb_{idx:03d}.png")
+        shutil.copy2(img_file.name, output_path)
     
-    # 균일한 간격으로 선택
-    if len(imgs) > num_frames:
-        indices = np.linspace(0, len(imgs)-1, num_frames, dtype=int)
-        selected = [imgs[i] for i in indices]
-    else:
-        selected = imgs
-    
-    # 선택한 이미지 복사
-    for idx, img in enumerate(selected):
-        output_path = os.path.join(dir, f"rgb_{idx:03d}.jpg")
-        shutil.copy2(img, output_path)
-    
-    return f"Extracted {len(selected)} images from folder"
+    return f"Processed {len(input)} images"
 
 def upload(input, num_frames=80):
     try:
+        # 예외처리
+        if not input:
+            return "Please upload a video file or select an image folder"
+        
         # 업로드 파일 경로
         dir = "data/custom/input"
         os.makedirs(dir, exist_ok=True)
@@ -69,16 +57,14 @@ def upload(input, num_frames=80):
             file = os.path.join(dir, f)
             if os.path.isfile(file):
                 os.unlink(file)
-
-        # 예외처리
-        if not input:
-            return "Please upload a video file or select an image folder"
         
         file_path = Path(input.name)
         if file_path.suffix.lower() in ['.mp4', '.avi', '.mov']:
-            result = process_video(input.name, num_frames)
+            if len(input) > 1:
+                return "Please upload only one video file"
+            result = process_video(input[0].name, num_frames)
         else:
-            result = process_folder(input.name, num_frames)
+            result = process_image(input.name)
         
         # convert.py 실행
         os.system(f"python convert.py -s data/custom")
@@ -91,21 +77,21 @@ def upload(input, num_frames=80):
 with gr.Blocks() as demo:
     gr.Markdown("# Feature-3DGS Upload Interface")
     gr.Markdown("""
-    Upload options:
-    1. Select a folder containing images (will sample 80 images uniformly)
-    2. Upload a video file (will extract 80 frames at equal intervals)
+    Select files to upload:
+    - For images: Select multiple image files
+    - For video: Select a single video file
+    
+    Supported formats:
+    - Video (.mp4, .avi, .mov): Will extract 80 frames at equal intervals
+    - Images (.jpg, .jpeg, .png): Will use all selected images
     """)
 
-    with gr.Row():
-        file_input = gr.File(
-            label="Upload Video or Select Image Folder",
-            file_count="directory",  # 폴더 업로드 허용
-            file_types=["video"]     # 비디오 파일도 허용
-        )
-    
-    with gr.Row():
-        process_btn = gr.Button("Process")
-    
+    file_input = gr.File(
+        label="Upload Video or Select Image Folder",
+        file_count="multiple",
+        file_types=["jpg", "jpeg", "png", "mp4", "avi", "mov"]
+    )
+    process_btn = gr.Button("Process")
     output_text = gr.Textbox(label="Status")
 
     # 처리 버튼 클릭 시
