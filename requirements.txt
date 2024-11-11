@@ -24,3 +24,7 @@ git+https://github.com/zhanghang1989/PyTorch-Encoding/
 pycocotools
 onnxruntime 
 onnx
+
+## application
+gradio
+pillow
