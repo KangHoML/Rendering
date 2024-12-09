@@ -1,96 +1,79 @@
-import cv2
 import os
+import cv2
 import argparse
+import subprocess
+from pathlib import Path
 
+class VideoCreator:
+    def __init__(self, root, iteration, model, fps=10):
+        self.root = root
+        self.iteration = iteration
+        self.model = model
+        self.fps = fps
+        self.video_dir = os.path.join(root, f"videos_{iteration}")
+        os.makedirs(self.video_dir, exist_ok=True)
+    
+    def create_video(self, src_dir, video_path, imgs=None):
+        if imgs is None:
+            imgs = sorted([f for f in os.listdir(src_dir) if f.endswith('.png')])
+        else:
+            imgs = sorted(imgs)
+        
+        # ffmpeg even dimensions
+        sample = cv2.imread(os.path.join(src_dir, imgs[0]))
+        height, width = sample.shape[:2]
+        height -= height % 2
+        width -= width % 2
 
-parser = argparse.ArgumentParser(
-    description=(
-        "Create Lseg videos: rgb, fmap, seg, edit."
-    )
-)
+        cmd = [
+            'ffmpeg', '-y',
+            '-framerate', str(self.fps),
+            '-pattern_type', 'glob',
+            '-i', os.path.join(src_dir, '*.png'),
+            '-vf', f'scale={width}:{height}',
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            video_path
+        ]
+        subprocess.run(cmd, check=True)
 
-parser.add_argument(
-    "--data",
-    type=str,
-    help="Path including input images (and features)",
-)
+    def train_video(self):
+        src_dir = os.path.join(self.root, "train", f"ours_{self.iteration}", "renders")
+        seg_dir = os.path.join(self.root, f"seg_{self.iteration}", "train")
 
-parser.add_argument(
-    "--iteration",
-    type=int,
-    required=True,
-    help="Chosen number of iterations"
-)
+        if os.path.exists(src_dir):
+            rgb_video = os.path.join(self.video_dir, f"train_{self.iteration}.mp4")
+            self.create_video(src_dir, rgb_video)
+        
+        if os.path.exists(seg_dir):
+            seg_video = os.path.join(self.video_dir, f"train_seg_{self.iteration}.mp4")
+            self.create_video(seg_dir, seg_video)
+        
+    def novel_video(self):
+        src_dir = os.path.join(self.root, "novel_views", f"ours_{self.iteration}", "renders")
+        seg_dir = os.path.join(self.root, f"seg_{self.iteration}", "novel_views")
 
-parser.add_argument(
-    "--fps",
-    default=10,
-    type=int,
-    help="Chosen number of iterations"
-)
+        if self.model == 'lseg':
+            masks = [f for f in os.listdir(seg_dir) if f.endswith('.png')]
+        elif self.model == 'sam':
+            masks = [f for f in os.listdir(seg_dir) if f.endswith('_seg.png')]            
 
-parser.add_argument("--foundation_model", "-f", required=True, type=str)
+        if os.path.exists(src_dir):
+            rgb_video = os.path.join(self.video_dir, f"novel_{self.iteration}.mp4")
+            self.create_video(src_dir, rgb_video)
+        
+        if os.path.exists(seg_dir):
+            seg_video = os.path.join(self.video_dir, f"novel_seg_{self.iteration}.mp4")
+            self.create_video(seg_dir, seg_video, masks)
 
-
-def create_video_from_images(image_folder, output_video_file, fps):
-    images = [img for img in os.listdir(image_folder) if img.endswith(".jpg") or img.endswith(".png")]
-    images.sort()
-
-    # Determine the width and height from the first image
-    frame = cv2.imread(os.path.join(image_folder, images[0]))
-    height, width, layers = frame.shape
-
-    video = cv2.VideoWriter(output_video_file, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
-
-    for image in images:
-        video.write(cv2.imread(os.path.join(image_folder, image)))
-
-    # cv2.destroyAllWindows()
-    video.release()
-
-
-def main(args: argparse.Namespace) -> None:
-    video_folder = os.path.join(args.data, "videos_{}".format(args.iteration))
-    os.makedirs(video_folder, exist_ok=True)
-
-    if args.foundation_model == 'lseg':
-        # rendered results
-        for res_dir in os.listdir(os.path.join(args.data, "novel_views")):
-            if "ours_{}".format(args.iteration) in res_dir:
-                if 'deletion' not in res_dir and 'extraction' not in res_dir and 'color_func' not in res_dir:
-                    fmap_folder = os.path.join(args.data, "novel_views", res_dir, 'feature_map')
-                    fmap_video_file = os.path.join(video_folder, '{}_fmap.mp4'.format(res_dir))
-                    create_video_from_images(fmap_folder, fmap_video_file, args.fps) 
-                image_folder = os.path.join(args.data, "novel_views", res_dir, 'renders')
-                fmap_video_file = os.path.join(video_folder, '{}.mp4'.format(res_dir))
-                create_video_from_images(image_folder, fmap_video_file, args.fps) 
-        # seg results
-        for sub_dir in os.listdir(args.data):
-            if "seg_{}".format(args.iteration) in sub_dir:
-                seg_folder = os.path.join(args.data, sub_dir, "novel_views")
-                seg_video_file = os.path.join(video_folder, '{}.mp4'.format(sub_dir))
-                create_video_from_images(seg_folder, seg_video_file, args.fps) 
-
-    elif args.foundation_model == 'sam':
-        # rendered results
-        for res_dir in os.listdir(os.path.join(args.data, "novel_views")):
-            if "ours_{}".format(args.iteration) in res_dir:
-                fmap_folder = os.path.join(args.data, "novel_views", res_dir, 'feature_map')
-                fmap_video_file = os.path.join(video_folder, '{}_fmap.mp4'.format(res_dir))
-                create_video_from_images(fmap_folder, fmap_video_file, args.fps) 
-                image_folder = os.path.join(args.data, "novel_views", res_dir, 'renders')
-                fmap_video_file = os.path.join(video_folder, '{}.mp4'.format(res_dir))
-                create_video_from_images(image_folder, fmap_video_file, args.fps)
-        # seg results
-        for sub_dir in os.listdir(args.data):
-            if "seg_" in sub_dir:
-                for seg_dir in os.listdir(os.path.join(args.data, sub_dir)):
-                    seg_folder = os.path.join(args.data, sub_dir, seg_dir)
-                    seg_video_file = os.path.join(video_folder, '{}_{}.mp4'.format(sub_dir, seg_dir.split("_")[-1]))
-                    create_video_from_images(seg_folder, seg_video_file, args.fps)
-
-
+parser = argparse.ArgumentParser(description="Create videos from image sequences")
+parser.add_argument("--root", type=str, required=True, help="Path including input images")
+parser.add_argument("--iteration", type=int, required=True, help="Iteration number")
+parser.add_argument("--fps", type=int, default=10, help="Frames per second")
+parser.add_argument("--foundation_model", "-f", required=True, choices=['lseg', 'sam'], help="Foundation model type")
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    main(args)
+    creator = VideoCreator(args.root, args.iteration, args.foundation_model, args.fps)
+    creator.train_video()
+    creator.novel_video()

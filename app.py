@@ -2,37 +2,26 @@ import os
 import shutil
 import subprocess
 import gradio as gr
-from pathlib import Path
 
-def preprocess(files, progress=gr.Progress()):
-    progress(0, desc="Starting preprocessing...")
-
+def upload(files):
+    # file 없는 경우
+    if files is None: return None
+    
     # 기존 데이터 삭제 후 새로 생성
     if os.path.exists("data/custom"):
         shutil.rmtree("data/custom")
     os.makedirs("data/custom/input", exist_ok=True)
-    
-    progress(0.2, desc="Processing input files...")
-    file_path = Path(files[0].name)
-    if file_path.suffix.lower() in ['.mp4', '.avi', '.mov']:
-        subprocess.run([
-                "python", "preprocess.py",
-                "--video_path", file_path,
-                "--output_dir", "data/custom"
-            ])
-    else:
-        for i, img in enumerate(files):
-            output_path = os.path.join("data/custom/input", f"rgb_{i:04d}.jpg")
-            shutil.copy2(img.name, output_path)
-    
-    # COLMAP 실행
-    progress(0.6, desc="Running COLMAP...")
-    subprocess.run(["python", "convert.py", "-s", "data/custom"])
-    
-    progress(1.0, desc="Preprocessing complete!")
-    return "✅ Preprocessing completed successfully"
 
-def train(encoder_type, progress=gr.Progress()):
+    # 이미지 서버에 저장
+    imgs = []
+    for i, img in enumerate(files):
+        output_path = os.path.join("data/custom/input", f"rgb_{i:04d}.jpg")
+        shutil.copy2(img.name, output_path)
+        imgs.append(img.name)
+    
+    return imgs if imgs else None
+
+def train(encoder_type, progress=gr.Progress(track_tqdm=True)):
     progress(0, desc="Starting training...")
 
     # 기존 데이터 삭제 후 새로 생성
@@ -40,8 +29,12 @@ def train(encoder_type, progress=gr.Progress()):
         shutil.rmtree("output/custom")
     os.makedirs("output/custom", exist_ok=True)
 
+    # COLMAP
+    progress(0.1, desc="Running COLMAP...")
+    subprocess.run(["python", "convert.py", "-s", "data/custom"])
+
     # Encoding
-    progress(0.2, desc="Running feature encoding...")
+    progress(0.3, desc="Running feature encoding...") 
     cmd = None
     if encoder_type == "lseg":
         cmd = "cd encoders/lseg_encoder && python encode_images.py --backbone clip_vitl16_384 --weights demo_e200.ckpt --widehead --no-scaleinv --outdir ../../data/custom/rgb_feature_langseg --test-rgb-dir ../../data/custom/images"
@@ -50,7 +43,7 @@ def train(encoder_type, progress=gr.Progress()):
     subprocess.run(cmd, shell=True)
 
     # Training
-    progress(0.4, desc="Training model...")
+    progress(0.6, desc="Training model...")
     subprocess.run([
         "python", "train.py",
         "-s", "data/custom",
@@ -61,24 +54,24 @@ def train(encoder_type, progress=gr.Progress()):
     ])
 
     progress(1.0, desc="Training complete!")
-    return "✅ Training completed successfully"
+    return "✅ Training completed successfully"  # status message만 반환
 
-def render_video(encoder_type, progress=gr.Progress()):
-    progress(0, desc="Starting rendering...")
+def render(encoder_type, progress=gr.Progress(track_tqdm=True)):
+    progress(0, desc="Starting rendering process...")
 
-    # novel_view rendering
-    progress(0.3, desc="Rendering novel views...")
+    # 렌더링
+    progress(0.1, desc="Starting rendering...")
     subprocess.run([
         "python", "render.py",
         "-s", "data/custom",
         "-m", "output/custom",
-        "-f", encoder_type,
+        "-f", encoder_type, 
         "--iteration", "5000",
         "--novel_view"
     ])
 
     # Run Segmentation
-    progress(0.5, desc="Generating segmentation...")
+    progress(0.4, desc="Starting segmentation...")
     if encoder_type == "sam":
         subprocess.run([
             "python", "encoders/sam_encoder/segment.py",
@@ -93,83 +86,83 @@ def render_video(encoder_type, progress=gr.Progress()):
             "--data", "output/custom",
             "--iteration", "5000"
         ])
-
-    # video 생성
-    progress(0.7, desc="Creating videos...")
+        
+    # Video 생성
+    progress(0.7, desc="Starting video creation...")
     subprocess.run([
-        "python", "videos2.py",
-        "--data", "output/custom",
+        "python", "videos.py",
+        "--root", "output/custom", 
         "-f", encoder_type,
         "--iteration", "5000"
     ])
 
-    # RGB와 feature map video
-    rgb_video = "output/custom/videos_5000/ours_5000.mp4"
-    if encoder_type == "lseg":
-        seg_video = "output/custom/videos_5000/seg_5000.mp4"
-    elif encoder_type == "sam":
-        seg_video = "output/custom/videos_5000/seg_5000_noprompt.mp4"
+    # 비디오 경로
+    train_rgb = "output/custom/videos_5000/train_5000.mp4"
+    train_seg = "output/custom/videos_5000/train_seg_5000.mp4"
+    novel_rgb = "output/custom/videos_5000/novel_5000.mp4"
+    novel_seg = "output/custom/videos_5000/novel_seg_5000.mp4"
 
-    if not os.path.exists(rgb_video) or not os.path.exists(seg_video):
-        return None, None, "❌ Error generating videos"
-    
     progress(1.0, desc="Rendering complete!")
-    return rgb_video, seg_video, "✅ Videos generated successfully"
+    return train_rgb, train_seg, novel_rgb, novel_seg, "✅ Rendering completed successfully"
 
-with gr.Blocks() as app:
+# UI
+with gr.Blocks(css="""
+    .scrollable-gallery { max-height: 300px; overflow-y: auto; }
+    """) as app:
+
     gr.Markdown("""
     # Feature 3DGS: Real-time segment-able 3D Renderer
     Upload images or a video to create an segment-able 3D scene representation.
     """)
 
-    with gr.Row():
-        with gr.Column(scale=2):
-            input_files = gr.File(
-                label="Upload Images/Video",
-                file_count="multiple",
-                file_types=[".jpg", ".jpeg", ".png", ".mp4", ".avi", ".mov"]
-            )
-            encoder = gr.Radio(
-                choices=["lseg", "sam"],
-                label="Encoder Type",
-                info="Select the foundation model to use"
-            )
-        
-        with gr.Column(scale=1):
-            status_text = gr.Textbox(
-                label="Status",
-                interactive=False
-            )
-    
-    with gr.Row():
-        process_btn = gr.Button("1️⃣ Preprocess Input", variant="primary")
-        train_btn = gr.Button("2️⃣ Train Model", variant="primary")
-        render_btn = gr.Button("3️⃣ Generate Videos", variant="primary")
-    
+    # 이미지 업로드
     with gr.Row():
         with gr.Column():
-            rgb_video = gr.Video(label="RGB Video")
+            with gr.Column():
+                gallery = gr.File(label="Upload", file_types=["image"], file_count="multiple", height=300, elem_classes="scrollable-gallery")
+                encoder = gr.Radio(choices=["lseg", "sam"], label="Encoder Type")
         with gr.Column():
-            seg_video = gr.Video(label="Segmentation Video")
+            gallery_preview = gr.Gallery(label="Preview", show_label=False, columns=3, height=400)
 
+    # Train & Render 버튼
+    with gr.Row():
+        train_btn = gr.Button("Train")
+        render_btn = gr.Button("Render")
+    status = gr.Textbox(label="Status")
+
+    # 렌더링
+    with gr.Tabs() as tabs:
+        # Training Results Tab
+        with gr.Tab("Training Results"):
+            with gr.Row():
+                train_rgb = gr.Video(label="RGB Render")
+                train_seg = gr.Video(label="Segmentation")
+        
+        # Novel View Results Tab
+        with gr.Tab("Novel View Results"):
+            with gr.Row():
+                novel_rgb = gr.Video(label="RGB Render")
+                novel_seg = gr.Video(label="Segmentation")
 
     # Event handlers
-    process_btn.click(
-        preprocess,
-        inputs=[input_files],
-        outputs=[status_text]
+    gallery.change(
+        fn=upload,
+        inputs=gallery,
+        outputs=gallery_preview
     )
-    
+
+    # Train 버튼 클릭 시
     train_btn.click(
-        train,
+        fn=train,
         inputs=[encoder],
-        outputs=[status_text]
+        outputs=[status]
     )
-    
+
+    # Render 버튼 클릭 시
     render_btn.click(
-        render_video,
+        fn=render,
         inputs=[encoder],
-        outputs=[rgb_video, seg_video, status_text]
+        outputs=[train_rgb, train_seg, novel_rgb, novel_seg, status]
     )
 
 app.launch(share=True)
