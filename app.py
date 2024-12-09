@@ -21,6 +21,22 @@ def upload(files):
     
     return imgs if imgs else None
 
+def update_config(encoder_type):
+    config_path = "submodules/diff-gaussian-rasterization-feature/cuda_rasterizer/config.h"
+    channels = "128" if encoder_type == "lseg" else "64"
+    
+    with open(config_path, 'r') as f:
+        config_content = f.read()
+    
+    # NUM_SEMANTIC_CHANNELS 값 업데이트
+    new_content = config_content.replace(
+        "#define NUM_SEMANTIC_CHANNELS", 
+        f"#define NUM_SEMANTIC_CHANNELS {channels}"
+    )
+    
+    with open(config_path, 'w') as f:
+        f.write(new_content)
+
 def train(encoder_type, progress=gr.Progress(track_tqdm=True)):
     progress(0, desc="Starting training...")
 
@@ -29,12 +45,20 @@ def train(encoder_type, progress=gr.Progress(track_tqdm=True)):
         shutil.rmtree("output/custom")
     os.makedirs("output/custom", exist_ok=True)
 
+    # CUDA rasterizer 재설치
+    progress(0.1, desc="Updating CUDA Rasterization...")
+    update_config(encoder_type)
+    subprocess.run([
+        "pip", "install", 
+        "submodules/diff-gaussian-rasterization-feature"
+    ])
+
     # COLMAP
-    progress(0.1, desc="Running COLMAP...")
+    progress(0.2, desc="Running COLMAP...")
     subprocess.run(["python", "convert.py", "-s", "data/custom"])
 
     # Encoding
-    progress(0.3, desc="Running feature encoding...") 
+    progress(0.4, desc="Running feature encoding...") 
     cmd = None
     if encoder_type == "lseg":
         cmd = "cd encoders/lseg_encoder && python encode_images.py --backbone clip_vitl16_384 --weights demo_e200.ckpt --widehead --no-scaleinv --outdir ../../data/custom/rgb_feature_langseg --test-rgb-dir ../../data/custom/images"
