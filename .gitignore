@@ -11,3 +11,4 @@ screenshots
 *.pth
 data
 data_scannet
+submodules/diff-gaussian-rasterization-feature/cuda_rasterizer/config.h

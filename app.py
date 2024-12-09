@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import gradio as gr
@@ -29,10 +30,9 @@ def update_config(encoder_type):
         config_content = f.read()
     
     # NUM_SEMANTIC_CHANNELS 값 업데이트
-    new_content = config_content.replace(
-        "#define NUM_SEMANTIC_CHANNELS", 
-        f"#define NUM_SEMANTIC_CHANNELS {channels}"
-    )
+    pattern = r'#define NUM_SEMANTIC_CHANNELS \d+ .*'
+    replacement = f'#define NUM_SEMANTIC_CHANNELS {channels} //512({channels}), 256(64) // Subject to change'
+    new_content = re.sub(pattern, replacement, config_content)
     
     with open(config_path, 'w') as f:
         f.write(new_content)
