@@ -53,6 +53,7 @@ parser.add_argument("--image", action="store_true", help="If true, encode featur
 
 parser.add_argument("--device", type=str, default="cuda", help="The device to run generation on.")
 
+parser.add_argument("--skip_test",  action="store_true", help="Skip test set processing")
 
 def show_anns(anns):
     if len(anns) == 0:
@@ -152,7 +153,8 @@ def main(args: argparse.Namespace) -> None:
         seg_path = os.path.join(args.data, "seg_{}".format(args.iteration))
     os.makedirs(seg_path, exist_ok=True)
 
-    for name in ["test", "train", "novel_views"]:
+    modes = ["train", "novel_views"] if args.skip_test else ["test", "train", "novel_views"]
+    for name in modes:
         segment(args.data, name, args.iteration, args.image, seg_path, mask_generator)
 
 

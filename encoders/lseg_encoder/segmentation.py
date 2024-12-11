@@ -442,10 +442,10 @@ def test(args):
     # logit_scale = logit_scale.cuda() # logit_scale = logit_scale.to(x.device) # TODO: need use correct device
 
 
-    if labelset == []:
-        seg_path = os.path.join(args.data, "seg_{}_labels".format(args.iteration))
-    else:
-        seg_path = os.path.join(args.data, "seg_{}".format(args.iteration))
+    # if labelset == []:
+    #     seg_path = os.path.join(args.data, "seg_{}_labels".format(args.iteration))
+    # else:
+    seg_path = os.path.join(args.data, "seg_{}".format(args.iteration))
     os.makedirs(seg_path, exist_ok=True)
 
     for name in ["test", "train", "novel_views"]:

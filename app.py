@@ -22,20 +22,33 @@ def upload(files):
     
     return imgs if imgs else None
 
-def update_config(encoder_type):
+def set_rasterizer(encoder_type):
     config_path = "submodules/diff-gaussian-rasterization-feature/cuda_rasterizer/config.h"
-    channels = "128" if encoder_type == "lseg" else "64"
     
+    # 원본 config.h 내용 읽기
     with open(config_path, 'r') as f:
         config_content = f.read()
-    
-    # NUM_SEMANTIC_CHANNELS 값 업데이트
-    pattern = r'#define NUM_SEMANTIC_CHANNELS \d+ .*'
-    replacement = f'#define NUM_SEMANTIC_CHANNELS {channels} //512({channels}), 256(64) // Subject to change'
-    new_content = re.sub(pattern, replacement, config_content)
-    
+
+    if encoder_type == 'lseg':
+        content = re.sub(
+            r'#define NUM_SEMANTIC_CHANNELS \d+ .*',
+            '#define NUM_SEMANTIC_CHANNELS 128 // LSeg: 512->128->512',
+            config_content
+        )
+    elif encoder_type == 'sam':
+        content = re.sub(
+            r'#define NUM_SEMANTIC_CHANNELS \d+ .*',
+            '#define NUM_SEMANTIC_CHANNELS 64 // SAM: 256->64->256',
+            config_content
+        )
+
     with open(config_path, 'w') as f:
-        f.write(new_content)
+        f.write(content)
+    
+    subprocess.run([
+        "pip", "install", 
+        "submodules/diff-gaussian-rasterization-feature"
+    ])
 
 def train(encoder_type, progress=gr.Progress(track_tqdm=True)):
     progress(0, desc="Starting training...")
@@ -44,14 +57,10 @@ def train(encoder_type, progress=gr.Progress(track_tqdm=True)):
     if os.path.exists("output/custom"):
         shutil.rmtree("output/custom")
     os.makedirs("output/custom", exist_ok=True)
-
-    # CUDA rasterizer 재설치
-    progress(0.1, desc="Updating CUDA Rasterization...")
-    update_config(encoder_type)
-    subprocess.run([
-        "pip", "install", 
-        "submodules/diff-gaussian-rasterization-feature"
-    ])
+    
+    # Rasterizer 설정
+    progress(0.1, desc="Setting Rasterizer...")
+    set_rasterizer(encoder_type)
 
     # COLMAP
     progress(0.2, desc="Running COLMAP...")
@@ -74,7 +83,7 @@ def train(encoder_type, progress=gr.Progress(track_tqdm=True)):
         "-m", "output/custom",
         "-f", encoder_type,
         "--speedup",
-        "--iterations", "5000"
+        "--iterations", "5000",
     ])
 
     progress(1.0, desc="Training complete!")
@@ -91,25 +100,28 @@ def render(encoder_type, progress=gr.Progress(track_tqdm=True)):
         "-m", "output/custom",
         "-f", encoder_type, 
         "--iteration", "5000",
-        "--novel_view"
+        "--novel_view",
+        "--skip_test"
     ])
 
     # Run Segmentation
     progress(0.4, desc="Starting segmentation...")
     if encoder_type == "sam":
         subprocess.run([
-            "python", "encoders/sam_encoder/segment.py",
-            "--checkpoint", "encoders/sam_encoder/checkpoints/sam_vit_h_4b8939.pth",
+            "python", "segment.py",
+            "--checkpoint", "checkpoints/sam_vit_h_4b8939.pth",
             "--model-type", "vit_h",
-            "--data", "output/custom",
-            "--iteration", "5000"
-        ])
+            "--data", "../../output/custom",
+            "--iteration", "5000",
+            "--skip_test"
+        ], cwd="encoders/sam_encoder")
     elif encoder_type == "lseg":
         subprocess.run([
-            "python", "encoders/lseg_encoder/segmentation.py",
-            "--data", "output/custom",
+            "python", "segmentation.py",
+            "--weights", "demo_e200.ckpt",
+            "--data", "../../output/custom",
             "--iteration", "5000"
-        ])
+        ], cwd="encoders/lseg_encoder")
         
     # Video 생성
     progress(0.7, desc="Starting video creation...")
